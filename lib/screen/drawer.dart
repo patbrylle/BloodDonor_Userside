@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'home.dart';
 import 'login.dart';
 import '../widget/app_logo.dart';
+import 'donation_centers.dart';
+import 'appointment_booking.dart';
 
 class AppDrawer extends StatelessWidget {
   final VoidCallback? onProfileTap;
@@ -63,6 +65,22 @@ class AppDrawer extends StatelessWidget {
                     onTap: () =>
                         _go(context, const HomeScreen(initialIndex: 2)),
                   ),
+                  _DrawerItem(
+  icon: Icons.location_on_rounded,
+  label: 'Donation Centers',
+  onTap: () => _go(
+    context,
+    const DonationCentersScreen(),
+  ),
+),
+_DrawerItem(
+  icon: Icons.calendar_month_rounded,
+  label: 'Book Appointment',
+  onTap: () => _go(
+    context,
+    const AppointmentBookingScreen(),
+  ),
+),
                   _DrawerItem(
                     icon: Icons.history_rounded,
                     label: 'Activity',

@@ -1,512 +1,836 @@
+
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../model/blood_donor.dart';
-import '../widget/blood_donor.dart';
+import '../services/api_service.dart';
 
 class BloodRequestScreen extends StatefulWidget {
   const BloodRequestScreen({super.key});
 
   @override
-  State<BloodRequestScreen> createState() => _BloodRequestScreenState();
+  State<BloodRequestScreen> createState() =>
+      _BloodRequestScreenState();
 }
 
 class _BloodRequestScreenState extends State<BloodRequestScreen> {
-  final _requestFormKey = GlobalKey<FormState>();
-  final _searchController = TextEditingController();
-  String? _selectedBloodType;
-  final _locationController = TextEditingController();
-  String _requestedBloodType = 'O+';
-  String _requestedUrgency = 'Urgent';
-  int _requestedUnits = 1;
+  final TextEditingController _searchController =
+      TextEditingController();
 
-  final List<BloodDonor> _donors = [
-    BloodDonor(
-      name: 'Juan Dela Cruz',
-      email: 'juan.delacruz@example.com',
-      bloodType: 'O+',
-      contact: '0917 123 4567',
-      location: 'Quezon City',
-      unitsNeeded: 2,
-      urgency: 'Urgent',
-      requestedAt: DateTime(2026, 9, 16),
-      isAvailable: true,
-    ),
+  List<BloodDonor> _donors = [];
+  bool _isLoading = true;
+  String? _errorMessage;
+  String _selectedBloodType = 'All';
+
+  final List<String> _bloodTypes = [
+    'All',
+    'A+',
+    'A-',
+    'B+',
+    'B-',
+    'O+',
+    'O-',
+    'AB+',
+    'AB-',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDonors();
+  }
 
   @override
   void dispose() {
     _searchController.dispose();
-    _locationController.dispose();
     super.dispose();
   }
 
-  Future<void> _showCreateRequestDialog() async {
-    _locationController.clear();
-    await showDialog<void>(
-      context: context,
-      builder: (dialogContext) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            final theme = Theme.of(context);
-            final foregroundColor = theme.colorScheme.onSurface;
-            final iconColor = theme.colorScheme.primary;
+  Future<void> _loadDonors() async {
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _errorMessage = null;
+      });
+    }
 
-            return AlertDialog(
-              titlePadding: const EdgeInsets.fromLTRB(24, 24, 24, 8),
-              contentPadding: const EdgeInsets.fromLTRB(24, 0, 24, 8),
-              title: Row(
-                children: [
-                  Container(
-                    width: 42,
-                    height: 42,
-                    decoration: BoxDecoration(
-                      color: Theme.of(
-                        context,
-                      ).colorScheme.primary.withValues(alpha: 0.12),
-                      shape: BoxShape.circle,
-                    ),
-                    child: Icon(
-                      Icons.bloodtype_rounded,
-                      color: Theme.of(context).colorScheme.primary,
+    try {
+      final donors = await ApiService.getActiveDonors();
+
+      if (!mounted) return;
+
+      setState(() {
+        _donors = donors;
+        _isLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+
+      setState(() {
+        _errorMessage = 'Unable to load donors. Please try again.';
+        _isLoading = false;
+      });
+    }
+  }
+
+  List<BloodDonor> get _filteredDonors {
+    final query = _searchController.text.trim().toLowerCase();
+
+    return _donors.where((donor) {
+      final matchesSearch =
+          donor.name.toLowerCase().contains(query) ||
+          donor.bloodType.toLowerCase().contains(query) ||
+          donor.location.toLowerCase().contains(query);
+
+      final matchesBloodType =
+          _selectedBloodType == 'All' ||
+          donor.bloodType.toUpperCase() ==
+              _selectedBloodType.toUpperCase();
+
+      return matchesSearch && matchesBloodType;
+    }).toList();
+  }
+
+  Future<void> _openRequestForm() async {
+    final formKey = GlobalKey<FormState>();
+
+    final patientNameController = TextEditingController();
+    final hospitalController = TextEditingController();
+    final notesController = TextEditingController();
+
+    String selectedBloodType = 'O+';
+    int unitsNeeded = 1;
+    String urgency = 'Normal';
+    bool isSubmitting = false;
+
+    try {
+      final submitted = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (dialogContext) {
+          return StatefulBuilder(
+            builder: (context, setDialogState) {
+              return AlertDialog(
+                title: const Text('Make a Blood Request'),
+                content: SingleChildScrollView(
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextFormField(
+                          controller: patientNameController,
+                          textCapitalization:
+                              TextCapitalization.words,
+                          decoration: const InputDecoration(
+                            labelText: 'Patient Name',
+                            prefixIcon: Icon(Icons.person),
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if (value == null ||
+                                value.trim().isEmpty) {
+                              return 'Please enter the patient name.';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+
+                        DropdownButtonFormField<String>(
+                          initialValue: selectedBloodType,
+                          decoration: const InputDecoration(
+                            labelText: 'Required Blood Type',
+                            prefixIcon: Icon(Icons.bloodtype),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: _bloodTypes
+                              .where((type) => type != 'All')
+                              .map((type) {
+                            return DropdownMenuItem(
+                              value: type,
+                              child: Text(type),
+                            );
+                          }).toList(),
+                          onChanged: isSubmitting
+                              ? null
+                              : (value) {
+                                  if (value != null) {
+                                    setDialogState(() {
+                                      selectedBloodType = value;
+                                    });
+                                  }
+                                },
+                        ),
+                        const SizedBox(height: 16),
+
+                        DropdownButtonFormField<int>(
+                          initialValue: unitsNeeded,
+                          decoration: const InputDecoration(
+                            labelText: 'Units Needed',
+                            prefixIcon: Icon(Icons.medical_services),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: List.generate(5, (index) {
+                            final units = index + 1;
+
+                            return DropdownMenuItem<int>(
+                              value: units,
+                              child: Text(
+                                '$units ${units == 1 ? 'unit' : 'units'}',
+                              ),
+                            );
+                          }),
+                          onChanged: isSubmitting
+                              ? null
+                              : (value) {
+                                  if (value != null) {
+                                    setDialogState(() {
+                                      unitsNeeded = value;
+                                    });
+                                  }
+                                },
+                        ),
+                        const SizedBox(height: 16),
+
+                        TextFormField(
+                          controller: hospitalController,
+                          textCapitalization:
+                              TextCapitalization.words,
+                          decoration: const InputDecoration(
+                            labelText: 'Hospital / Location',
+                            prefixIcon: Icon(Icons.local_hospital),
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if (value == null ||
+                                value.trim().isEmpty) {
+                              return 'Please enter the hospital or location.';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 16),
+
+                        DropdownButtonFormField<String>(
+                          initialValue: urgency,
+                          decoration: const InputDecoration(
+                            labelText: 'Urgency',
+                            prefixIcon: Icon(Icons.priority_high),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'Normal',
+                              child: Text('Normal'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Urgent',
+                              child: Text('Urgent'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Critical',
+                              child: Text('Critical'),
+                            ),
+                          ],
+                          onChanged: isSubmitting
+                              ? null
+                              : (value) {
+                                  if (value != null) {
+                                    setDialogState(() {
+                                      urgency = value;
+                                    });
+                                  }
+                                },
+                        ),
+                        const SizedBox(height: 16),
+
+                        TextFormField(
+                          controller: notesController,
+                          maxLines: 3,
+                          textCapitalization:
+                              TextCapitalization.sentences,
+                          decoration: const InputDecoration(
+                            labelText: 'Additional Notes (Optional)',
+                            prefixIcon: Icon(Icons.notes),
+                            border: OutlineInputBorder(),
+                            alignLabelWithHint: true,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Create Blood Request',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        color: foregroundColor,
-                      ),
-                    ),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : () {
+                            Navigator.of(dialogContext).pop(false);
+                          },
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : () async {
+                            if (!formKey.currentState!.validate()) {
+                              return;
+                            }
+
+                            setDialogState(() {
+                              isSubmitting = true;
+                            });
+
+                            try {
+                              final notes = [
+                                if (urgency != 'Normal')
+                                  'Urgency: $urgency',
+                                if (notesController.text.trim().isNotEmpty)
+                                  notesController.text.trim(),
+                              ].join('\n');
+
+                              await ApiService.createBloodRequest(
+                                patientName:
+                                    patientNameController.text.trim(),
+                                bloodType: selectedBloodType,
+                                unitsNeeded: unitsNeeded,
+                                hospital: hospitalController.text.trim(),
+                                notes: notes.isEmpty ? null : notes,
+                              );
+
+                              if (!dialogContext.mounted) return;
+
+                              Navigator.of(dialogContext).pop(true);
+                            } catch (e) {
+                              if (!dialogContext.mounted) return;
+
+                              setDialogState(() {
+                                isSubmitting = false;
+                              });
+
+                              ScaffoldMessenger.of(dialogContext)
+                                  .showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    e.toString().replaceFirst(
+                                          'Exception: ',
+                                          '',
+                                        ),
+                                  ),
+                                ),
+                              );
+                            }
+                          },
+                    child: isSubmitting
+                        ? const SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text('Submit Request'),
                   ),
                 ],
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Form(
-                      key: _requestFormKey,
-                      child: Column(
+              );
+            },
+          );
+        },
+      );
+
+      if (!mounted) return;
+
+      if (submitted == true) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Blood request submitted successfully.',
+            ),
+            backgroundColor: Colors.green,
+          ),
+        );
+
+        await _loadDonors();
+      }
+    } finally {
+      patientNameController.dispose();
+      hospitalController.dispose();
+      notesController.dispose();
+    }
+  }
+
+  void _openDonorDetails(BloodDonor donor) {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => DonorDetailsScreen(donor: donor),
+      ),
+    );
+  }
+
+  Widget _buildDonorCard(BloodDonor donor) {
+    final theme = Theme.of(context);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 14),
+      clipBehavior: Clip.antiAlias,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                CircleAvatar(
+                  radius: 27,
+                  backgroundColor:
+                      theme.colorScheme.primaryContainer,
+                  child: Text(
+                    donor.bloodType,
+                    style: TextStyle(
+                      color: theme.colorScheme.onPrimaryContainer,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        donor.name,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 5),
+                      Row(
                         children: [
-                          Align(
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              'Tell us what is needed so nearby donors can respond quickly.',
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: theme.textTheme.bodySmall?.color,
-                              ),
-                            ),
+                          Icon(
+                            donor.isAvailable
+                                ? Icons.check_circle
+                                : Icons.schedule,
+                            size: 16,
+                            color: donor.isAvailable
+                                ? Colors.green
+                                : Colors.orange,
                           ),
-                          const SizedBox(height: 18),
-                          DropdownButtonFormField<String>(
-                            initialValue: _requestedBloodType,
-                            decoration: InputDecoration(
-                              labelText: 'Blood type',
-                              prefixIcon: Icon(
-                                Icons.bloodtype_outlined,
-                                color: iconColor,
-                              ),
+                          const SizedBox(width: 5),
+                          Text(
+                            donor.isAvailable
+                                ? 'Available'
+                                : 'Unavailable',
+                            style: TextStyle(
+                              color: donor.isAvailable
+                                  ? Colors.green
+                                  : Colors.orange,
+                              fontWeight: FontWeight.w500,
                             ),
-                            items:
-                                const [
-                                      'A+',
-                                      'A-',
-                                      'B+',
-                                      'B-',
-                                      'AB+',
-                                      'AB-',
-                                      'O+',
-                                      'O-',
-                                    ]
-                                    .map(
-                                      (type) => DropdownMenuItem(
-                                        value: type,
-                                        child: Text(
-                                          type,
-                                          style: TextStyle(
-                                            color: foregroundColor,
-                                            fontWeight: FontWeight.w600,
-                                          ),
-                                        ),
-                                      ),
-                                    )
-                                    .toList(),
-                            onChanged: (value) {
-                              if (value != null) {
-                                setDialogState(() {
-                                  _requestedBloodType = value;
-                                });
-                              }
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          DropdownButtonFormField<int>(
-                            initialValue: _requestedUnits,
-                            decoration: InputDecoration(
-                              labelText: 'Units needed',
-                              prefixIcon: Icon(
-                                Icons.water_drop_outlined,
-                                color: iconColor,
-                              ),
-                            ),
-                            items: [1, 2, 3, 4, 5]
-                                .map(
-                                  (units) => DropdownMenuItem(
-                                    value: units,
-                                    child: Text(
-                                      '$units ${units == 1 ? 'unit' : 'units'}',
-                                      style: TextStyle(
-                                        color: foregroundColor,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value != null) {
-                                setDialogState(() {
-                                  _requestedUnits = value;
-                                });
-                              }
-                            },
-                          ),
-                          const SizedBox(height: 12),
-                          TextFormField(
-                            controller: _locationController,
-                            textCapitalization: TextCapitalization.words,
-                            validator: (value) {
-                              if (value == null || value.trim().isEmpty) {
-                                return 'Enter a hospital or location';
-                              }
-                              return null;
-                            },
-                            decoration: InputDecoration(
-                              labelText: 'Hospital or location',
-                              hintText: 'e.g. Community Hospital',
-                              prefixIcon: Icon(
-                                Icons.location_on_outlined,
-                                color: iconColor,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          DropdownButtonFormField<String>(
-                            initialValue: _requestedUrgency,
-                            decoration: InputDecoration(
-                              labelText: 'Urgency',
-                              prefixIcon: Icon(
-                                Icons.priority_high_rounded,
-                                color: iconColor,
-                              ),
-                            ),
-                            items: const ['Normal', 'Urgent', 'Critical']
-                                .map(
-                                  (urgency) => DropdownMenuItem(
-                                    value: urgency,
-                                    child: Text(
-                                      urgency,
-                                      style: TextStyle(
-                                        color: foregroundColor,
-                                        fontWeight: FontWeight.w600,
-                                      ),
-                                    ),
-                                  ),
-                                )
-                                .toList(),
-                            onChanged: (value) {
-                              if (value != null) {
-                                setDialogState(() {
-                                  _requestedUrgency = value;
-                                });
-                              }
-                            },
                           ),
                         ],
                       ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(dialogContext),
-                  child: const Text('Cancel'),
-                ),
-                FilledButton.icon(
-                  onPressed: () {
-                    if (!_requestFormKey.currentState!.validate()) {
-                      return;
-                    }
-
-                    Navigator.pop(dialogContext);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          '$_requestedBloodType blood request created for '
-                          '$_requestedUnits ${_requestedUnits == 1 ? 'unit' : 'units'}.',
-                        ),
-                      ),
-                    );
-                  },
-                  icon: const Icon(Icons.send_rounded),
-                  label: const Text('Submit Request'),
+                    ],
+                  ),
                 ),
               ],
-            );
-          },
-        );
-      },
+            ),
+
+            const SizedBox(height: 14),
+
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Icon(
+                  Icons.location_on_outlined,
+                  size: 19,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    donor.location.isNotEmpty
+                        ? donor.location
+                        : 'Location not provided',
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 8),
+
+            Row(
+              children: [
+                const Icon(Icons.phone_outlined, size: 19),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    donor.contact.isNotEmpty
+                        ? donor.contact
+                        : 'Contact number not provided',
+                  ),
+                ),
+              ],
+            ),
+
+            const SizedBox(height: 16),
+
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                onPressed: () => _openDonorDetails(donor),
+                icon: const Icon(Icons.contact_phone_outlined),
+                label: const Text('Contact Donor'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDonorList() {
+    if (_isLoading) {
+      return const Center(
+        child: CircularProgressIndicator(),
+      );
+    }
+
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.cloud_off,
+                size: 48,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: _loadDonors,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Try Again'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final donors = _filteredDonors;
+
+    if (donors.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(
+                Icons.people_outline,
+                size: 56,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                _donors.isEmpty
+                    ? 'No active donors found.'
+                    : 'No donors match your search.',
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Try changing your search or blood type filter.',
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _loadDonors,
+      child: ListView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: donors.length,
+        itemBuilder: (context, index) {
+          return _buildDonorCard(donors[index]);
+        },
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final query = _searchController.text.trim().toLowerCase();
-    final filteredDonors = _donors.where((donor) {
-      final matchesSearch =
-          query.isEmpty ||
-          donor.name.toLowerCase().contains(query) ||
-          donor.bloodType.toLowerCase().contains(query) ||
-          donor.location.toLowerCase().contains(query) ||
-          donor.contact.toLowerCase().contains(query);
-      return matchesSearch &&
-          (_selectedBloodType == null || donor.bloodType == _selectedBloodType);
-    }).toList();
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Request Blood'),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh donors',
+            onPressed: _loadDonors,
+            icon: const Icon(Icons.refresh),
+          ),
+        ],
+      ),
+      body: Column(
         children: [
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Find a donor when it matters most.',
-              style: Theme.of(
-                context,
-              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w800),
-            ),
-          ),
-          const SizedBox(height: 4),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              'Search nearby requests and connect with an available donor.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                color: Theme.of(context).textTheme.bodySmall?.color,
-              ),
-            ),
-          ),
-          const SizedBox(height: 18),
-          Container(
-            padding: const EdgeInsets.all(6),
-            decoration: BoxDecoration(
-              color: Theme.of(
-                context,
-              ).colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(
-                color: Theme.of(context).dividerColor.withValues(alpha: 0.35),
-              ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _searchController,
-                    onChanged: (_) => setState(() {}),
-                    decoration: InputDecoration(
-                      hintText: 'Search donors...',
-                      prefixIcon: const Icon(Icons.search_rounded),
-                      filled: true,
-                      fillColor: Theme.of(context).colorScheme.surface,
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide.none,
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide.none,
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(14),
-                        borderSide: BorderSide(
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                      ),
-                    ),
-                  ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (_) => setState(() {}),
+              decoration: InputDecoration(
+                hintText: 'Search donor, blood type, or location',
+                prefixIcon: const Icon(Icons.search),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        tooltip: 'Clear search',
+                        onPressed: () {
+                          _searchController.clear();
+                          setState(() {});
+                        },
+                        icon: const Icon(Icons.clear),
+                      )
+                    : null,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
                 ),
-                const SizedBox(width: 6),
-                PopupMenuButton<String>(
-                  tooltip: 'Filter requests',
-                  onSelected: (filter) => setState(
-                    () =>
-                        _selectedBloodType = filter == 'All' ? null : filter,
-                  ),
-                  itemBuilder: (context) => const [
-                    PopupMenuItem(
-                      value: 'All',
-                      child: Text('All blood types'),
-                    ),
-                    PopupMenuItem(value: 'A+', child: Text('A+')),
-                    PopupMenuItem(value: 'A-', child: Text('A-')),
-                    PopupMenuItem(value: 'B+', child: Text('B+')),
-                    PopupMenuItem(value: 'B-', child: Text('B-')),
-                    PopupMenuItem(value: 'AB+', child: Text('AB+')),
-                    PopupMenuItem(value: 'AB-', child: Text('AB-')),
-                    PopupMenuItem(value: 'O+', child: Text('O+')),
-                    PopupMenuItem(value: 'O-', child: Text('O-')),
-                  ],
-                  icon: Icon(
-                    Icons.tune_rounded,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          if (_selectedBloodType != null) ...[
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Chip(
-                avatar: const Icon(Icons.bloodtype_rounded, size: 17),
-                label: Text(_selectedBloodType!),
-                onDeleted: () => setState(() => _selectedBloodType = null),
               ),
             ),
-          ],
+          ),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+            child: DropdownButtonFormField<String>(
+              initialValue: _selectedBloodType,
+              decoration: InputDecoration(
+                labelText: 'Filter by blood type',
+                prefixIcon: const Icon(Icons.bloodtype),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              items: _bloodTypes.map((type) {
+                return DropdownMenuItem<String>(
+                  value: type,
+                  child: Text(
+                    type == 'All' ? 'All Blood Types' : type,
+                  ),
+                );
+              }).toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() {
+                    _selectedBloodType = value;
+                  });
+                }
+              },
+            ),
+          ),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            child: SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _openRequestForm,
+                icon: const Icon(Icons.add),
+                label: const Text('Make a Blood Request'),
+              ),
+            ),
+          ),
+
+          Expanded(
+            child: _buildDonorList(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================
+// DONOR DETAILS SCREEN
+// ============================================================
+
+class DonorDetailsScreen extends StatelessWidget {
+  final BloodDonor donor;
+
+  const DonorDetailsScreen({
+    super.key,
+    required this.donor,
+  });
+
+  Future<void> _callDonor(BuildContext context) async {
+    final phone = donor.contact.trim();
+
+    if (phone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This donor has no contact number.'),
+        ),
+      );
+      return;
+    }
+
+    final phoneUri = Uri(
+      scheme: 'tel',
+      path: phone,
+    );
+
+    try {
+      final launched = await launchUrl(
+        phoneUri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!launched && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to open the phone dialer.'),
+          ),
+        );
+      }
+    } catch (_) {
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to open the phone dialer.'),
+        ),
+      );
+    }
+  }
+
+  Widget _buildDetailRow({
+    required IconData icon,
+    required String title,
+    required String value,
+  }) {
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(title),
+      subtitle: Text(value.isNotEmpty ? value : 'Not provided'),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Donor Details'),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(20),
+        children: [
+          const SizedBox(height: 12),
+
+          Center(
+            child: CircleAvatar(
+              radius: 44,
+              backgroundColor: theme.colorScheme.primaryContainer,
+              child: Text(
+                donor.bloodType,
+                style: TextStyle(
+                  color: theme.colorScheme.onPrimaryContainer,
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+
           const SizedBox(height: 16),
-          if (filteredDonors.isEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 48),
-              child: Column(
-                children: [
-                  Icon(
-                    Icons.search_off_rounded,
-                    size: 52,
-                    color: Theme.of(context).colorScheme.primary,
-                  ),
-                  const SizedBox(height: 12),
-                  Text(
-                    'No blood requests found',
-                    style: Theme.of(context).textTheme.titleMedium,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Try a different search or filter.',
-                    style: Theme.of(context).textTheme.bodyMedium,
-                  ),
-                ],
+
+          Text(
+            donor.name,
+            textAlign: TextAlign.center,
+            style: theme.textTheme.headlineSmall?.copyWith(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          Center(
+            child: Chip(
+              avatar: Icon(
+                donor.isAvailable
+                    ? Icons.check_circle
+                    : Icons.schedule,
+                color: donor.isAvailable
+                    ? Colors.green
+                    : Colors.orange,
               ),
-            )
-          else
-            ...filteredDonors.map(
-              (donor) => Padding(
-                padding: const EdgeInsets.only(bottom: 16),
-                child: BloodDonorCard(
-                  donor: donor,
-                  onRequestBlood: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          'Blood request selected for ${donor.name}',
-                        ),
-                        backgroundColor: Theme.of(context).colorScheme.error,
-                      ),
-                    );
-                  },
-                ),
+              label: Text(
+                donor.isAvailable
+                    ? 'Available to Donate'
+                    : 'Currently Unavailable',
               ),
             ),
-          const SizedBox(height: 18),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surface,
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: Theme.of(
-                  context,
-                ).colorScheme.primary.withValues(alpha: 0.25),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Theme.of(
-                    context,
-                  ).colorScheme.primary.withValues(alpha: 0.08),
-                  blurRadius: 18,
-                  offset: const Offset(0, 8),
-                ),
-              ],
-            ),
+          ),
+
+          const SizedBox(height: 24),
+
+          Card(
+            clipBehavior: Clip.antiAlias,
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 48,
-                      height: 48,
-                      decoration: BoxDecoration(
-                        color: Theme.of(
-                          context,
-                        ).colorScheme.primary.withValues(alpha: 0.12),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.bloodtype_rounded,
-                        color: Theme.of(context).colorScheme.primary,
-                        size: 26,
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'No compatible donor yet?',
-                            style: Theme.of(context).textTheme.titleMedium
-                                ?.copyWith(fontWeight: FontWeight.w800),
-                          ),
-                          const SizedBox(height: 4),
-                          Text(
-                            'Your request can reach donors who are ready to help.',
-                            style: Theme.of(context).textTheme.bodyMedium,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
+                _buildDetailRow(
+                  icon: Icons.bloodtype,
+                  title: 'Blood Type',
+                  value: donor.bloodType,
                 ),
-                const SizedBox(height: 14),
-                Text(
-                  'Create a request now and give your community a chance to save a life.',
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).textTheme.bodySmall?.color,
-                  ),
+                const Divider(height: 1),
+                _buildDetailRow(
+                  icon: Icons.location_on_outlined,
+                  title: 'Location',
+                  value: donor.location,
                 ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: _showCreateRequestDialog,
-                    icon: const Icon(Icons.bloodtype_rounded),
-                    label: const Text('Make a Blood Request'),
-                    style: FilledButton.styleFrom(
-                      backgroundColor: Theme.of(context).colorScheme.primary,
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                  ),
+                const Divider(height: 1),
+                _buildDetailRow(
+                  icon: Icons.phone_outlined,
+                  title: 'Contact Number',
+                  value: donor.contact,
                 ),
               ],
             ),
+          ),
+
+          const SizedBox(height: 24),
+
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: donor.contact.trim().isEmpty
+                  ? null
+                  : () => _callDonor(context),
+              icon: const Icon(Icons.call),
+              label: const Text('Call Donor'),
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          Text(
+            'Please contact the donor respectfully and confirm '
+            'their availability before making arrangements.',
+            textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium,
           ),
         ],
       ),

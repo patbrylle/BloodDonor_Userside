@@ -1,11 +1,13 @@
+
 import 'package:flutter/material.dart';
 
-import 'home.dart';
-import 'register.dart';
+import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 import '../widget/gradient_button.dart';
 import '../widget/app_logo.dart';
+import 'home.dart';
+import 'register.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -18,6 +20,8 @@ class _LoginScreenState extends State<LoginScreen>
     with SingleTickerProviderStateMixin {
   bool obscurePassword = true;
   bool _registerHovered = false;
+  bool _isLoading = false;
+
   final _formKey = GlobalKey<FormState>();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
@@ -42,6 +46,52 @@ class _LoginScreenState extends State<LoginScreen>
     super.dispose();
   }
 
+  // Authenticate the user with the Laravel API.
+  Future<void> _login() async {
+    if (!_formKey.currentState!.validate()) return;
+    if (_isLoading) return;
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await ApiService.login(
+        email: _emailController.text.trim(),
+        password: _passwordController.text,
+      );
+
+      if (!mounted) return;
+
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => const HomeScreen(),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+
+      final message = error
+          .toString()
+          .replaceFirst('Exception: ', '');
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -55,8 +105,14 @@ class _LoginScreenState extends State<LoginScreen>
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: isDark
-                ? [AppColors.background, const Color(0xFF120D10)]
-                : [const Color(0xFFFFF7F8), const Color(0xFFFFECEF)],
+                ? [
+                    AppColors.background,
+                    const Color(0xFF120D10),
+                  ]
+                : [
+                    const Color(0xFFFFF7F8),
+                    const Color(0xFFFFECEF),
+                  ],
           ),
         ),
         child: SafeArea(
@@ -74,11 +130,16 @@ class _LoginScreenState extends State<LoginScreen>
                       style: theme.textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.w900,
                         letterSpacing: 1.5,
-                        color: isDark ? AppColors.primaryLight : AppColors.primary,
+                        color: isDark
+                            ? AppColors.primaryLight
+                            : AppColors.primary,
                       ),
                     ),
                     const SizedBox(height: 24),
-                    const AppLogo(size: 88, iconSize: 44),
+                    const AppLogo(
+                      size: 88,
+                      iconSize: 44,
+                    ),
                     const SizedBox(height: 32),
                     Container(
                       width: double.infinity,
@@ -87,7 +148,8 @@ class _LoginScreenState extends State<LoginScreen>
                         color: theme.colorScheme.surface.withValues(
                           alpha: isDark ? 0.85 : 0.94,
                         ),
-                        borderRadius: BorderRadius.circular(AppRadius.lg),
+                        borderRadius:
+                            BorderRadius.circular(AppRadius.lg),
                         border: Border.all(
                           color: theme.dividerColor.withValues(
                             alpha: isDark ? 0.4 : 0.2,
@@ -104,12 +166,14 @@ class _LoginScreenState extends State<LoginScreen>
                         ],
                       ),
                       child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        crossAxisAlignment:
+                            CrossAxisAlignment.stretch,
                         children: [
                           Text(
                             'Welcome back',
                             textAlign: TextAlign.center,
-                            style: textTheme.headlineSmall?.copyWith(
+                            style:
+                                textTheme.headlineSmall?.copyWith(
                               fontWeight: FontWeight.w800,
                             ),
                           ),
@@ -122,138 +186,197 @@ class _LoginScreenState extends State<LoginScreen>
                             ),
                           ),
                           const SizedBox(height: 28),
+
+                          // Login form
                           Form(
                             key: _formKey,
                             autovalidateMode:
                                 AutovalidateMode.onUserInteraction,
                             child: Column(
                               children: [
-                        // Email
-                        TextFormField(
-                          controller: _emailController,
-                          keyboardType: TextInputType.emailAddress,
-                          decoration: const InputDecoration(
-                            labelText: 'Email',
-                            hintText: 'Enter your email',
-                            prefixIcon: Icon(
-                              Icons.email_outlined,
-                              size: 20,
-                            ),
-                          ),
-                          validator: (value) {
-                            if (value == null || value.trim().isEmpty) {
-                              return 'Email is required';
-                            }
-                            final emailRegex = RegExp(
-                              r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$',
-                            );
-                            if (!emailRegex.hasMatch(value.trim())) {
-                              return 'Please enter a valid email';
-                            }
-                            return null;
-                          },
-                        ),
-
-                        const SizedBox(height: 18),
-
-                        // Password
-                        TextFormField(
-                          controller: _passwordController,
-                          obscureText: obscurePassword,
-                          decoration: InputDecoration(
-                            labelText: 'Password',
-                            hintText: 'Enter your password',
-                            prefixIcon: const Icon(
-                              Icons.lock_outline,
-                              size: 20,
-                            ),
-                            suffixIcon: IconButton(
-                              onPressed: () {
-                                setState(() {
-                                  obscurePassword = !obscurePassword;
-                                });
-                              },
-                              icon: Icon(
-                                obscurePassword
-                                    ? Icons.visibility_off_outlined
-                                    : Icons.visibility_outlined,
-                                size: 20,
-                              ),
-                            ),
-                          ),
-                          validator: (value) {
-                            if (value == null || value.isEmpty) {
-                              return 'Password is required';
-                            }
-                            if (value.length < 6) {
-                              return 'Password must be at least 6 characters';
-                            }
-                            return null;
-                          },
-                        ),
-
-                        const SizedBox(height: 28),
-
-                        // Login button
-                        SizedBox(
-                          width: double.infinity,
-                          child: GradientButton(
-                            label: 'LOGIN',
-                            onTap: () {
-                              if (_formKey.currentState!.validate()) {
-                                Navigator.pushReplacement(
-                                  context,
-                                  MaterialPageRoute(
-                                    builder: (_) => const HomeScreen(),
+                                // Email
+                                TextFormField(
+                                  controller: _emailController,
+                                  keyboardType:
+                                      TextInputType.emailAddress,
+                                  textInputAction:
+                                      TextInputAction.next,
+                                  autofillHints: const [
+                                    AutofillHints.username,
+                                    AutofillHints.email,
+                                  ],
+                                  enabled: !_isLoading,
+                                  decoration:
+                                      const InputDecoration(
+                                    labelText: 'Email',
+                                    hintText: 'Enter your email',
+                                    prefixIcon: Icon(
+                                      Icons.email_outlined,
+                                      size: 20,
+                                    ),
                                   ),
-                                );
-                              }
-                            },
-                          ),
-                        ),
+                                  validator: (value) {
+                                    if (value == null ||
+                                        value.trim().isEmpty) {
+                                      return 'Email is required';
+                                    }
+
+                                    final emailRegex = RegExp(
+                                      r'^[\w.-]+@([\w-]+\.)+[\w-]{2,}$',
+                                    );
+
+                                    if (!emailRegex
+                                        .hasMatch(value.trim())) {
+                                      return 'Please enter a valid email';
+                                    }
+
+                                    return null;
+                                  },
+                                ),
+
+                                const SizedBox(height: 18),
+
+                                // Password
+                                TextFormField(
+                                  controller: _passwordController,
+                                  obscureText: obscurePassword,
+                                  textInputAction:
+                                      TextInputAction.done,
+                                  autofillHints: const [
+                                    AutofillHints.password,
+                                  ],
+                                  enabled: !_isLoading,
+                                  onFieldSubmitted: (_) {
+                                    if (!_isLoading) {
+                                      _login();
+                                    }
+                                  },
+                                  decoration: InputDecoration(
+                                    labelText: 'Password',
+                                    hintText: 'Enter your password',
+                                    prefixIcon: const Icon(
+                                      Icons.lock_outline,
+                                      size: 20,
+                                    ),
+                                    suffixIcon: IconButton(
+                                      onPressed: _isLoading
+                                          ? null
+                                          : () {
+                                              setState(() {
+                                                obscurePassword =
+                                                    !obscurePassword;
+                                              });
+                                            },
+                                      icon: Icon(
+                                        obscurePassword
+                                            ? Icons
+                                                .visibility_off_outlined
+                                            : Icons
+                                                .visibility_outlined,
+                                        size: 20,
+                                      ),
+                                    ),
+                                  ),
+                                  validator: (value) {
+                                    if (value == null ||
+                                        value.isEmpty) {
+                                      return 'Password is required';
+                                    }
+
+                                    if (value.length < 6) {
+                                      return 'Password must be at least 6 characters';
+                                    }
+
+                                    return null;
+                                  },
+                                ),
+
+                                const SizedBox(height: 28),
+
+                                // Login button
+                                SizedBox(
+                                  width: double.infinity,
+                                  child: GradientButton(
+                                    label: _isLoading
+                                        ? 'LOGGING IN...'
+                                        : 'LOGIN',
+                                    onTap: _isLoading
+                                        ? () {}
+                                        : _login,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
+
                           const SizedBox(height: 12),
+
+                          // Forgot password
                           TextButton(
-                            onPressed: () {},
+                            onPressed: _isLoading
+                                ? null
+                                : () {
+                                    ScaffoldMessenger.of(context)
+                                        .showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'Forgot password is not connected yet.',
+                                        ),
+                                      ),
+                                    );
+                                  },
                             child: const Text('Forgot Password?'),
                           ),
+
                           const SizedBox(height: 8),
+
+                          // Register link
                           Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisAlignment:
+                                MainAxisAlignment.center,
                             children: [
                               Text(
                                 "Don't have an account? ",
                                 style: textTheme.bodySmall?.copyWith(
-                                  color: textTheme.bodySmall?.color,
+                                  color:
+                                      textTheme.bodySmall?.color,
                                 ),
                               ),
                               MouseRegion(
                                 cursor: SystemMouseCursors.click,
-                                onEnter: (_) =>
-                                    setState(() => _registerHovered = true),
-                                onExit: (_) =>
-                                    setState(() => _registerHovered = false),
+                                onEnter: (_) {
+                                  setState(() {
+                                    _registerHovered = true;
+                                  });
+                                },
+                                onExit: (_) {
+                                  setState(() {
+                                    _registerHovered = false;
+                                  });
+                                },
                                 child: GestureDetector(
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            const RegisterScreen(),
-                                      ),
-                                    );
-                                  },
+                                  onTap: _isLoading
+                                      ? null
+                                      : () {
+                                          Navigator.push(
+                                            context,
+                                            MaterialPageRoute(
+                                              builder: (_) =>
+                                                  const RegisterScreen(),
+                                            ),
+                                          );
+                                        },
                                   child: AnimatedDefaultTextStyle(
-                                    duration:
-                                        const Duration(milliseconds: 150),
+                                    duration: const Duration(
+                                      milliseconds: 150,
+                                    ),
                                     style: TextStyle(
                                       color: _registerHovered
                                           ? AppColors.primary
                                           : AppColors.primaryLight,
                                       fontWeight: FontWeight.w700,
-                                      fontSize: _registerHovered ? 14 : 13,
+                                      fontSize:
+                                          _registerHovered ? 14 : 13,
                                       decoration: _registerHovered
                                           ? TextDecoration.underline
                                           : TextDecoration.none,

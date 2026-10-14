@@ -1,7 +1,15 @@
 import 'package:blood_donor/model/blood_request_model.dart';
 import 'package:blood_donor/model/blood_drive.dart';
 import 'package:flutter/material.dart';
+
+import '../screen/join.dart';
+import '../services/api_service.dart';
 import '../theme/app_radius.dart';
+
+// =========================================================
+// DONATION ACTIVITY CARD
+// Displays a blood request and its donor information.
+// =========================================================
 
 class DonationActivityCard extends StatefulWidget {
   const DonationActivityCard({
@@ -16,85 +24,189 @@ class DonationActivityCard extends StatefulWidget {
   final bool isCompatible;
 
   @override
-  State<DonationActivityCard> createState() => _DonationActivityCardState();
+  State<DonationActivityCard> createState() =>
+      _DonationActivityCardState();
 }
 
-class UpcomingBloodActivitiesScreen extends StatelessWidget {
+// =========================================================
+// UPCOMING BLOOD ACTIVITIES
+// Loads published events from the Laravel API.
+// =========================================================
+
+class UpcomingBloodActivitiesScreen extends StatefulWidget {
   const UpcomingBloodActivitiesScreen({super.key});
 
-  static const activities = [
-    BloodDrive(
-      name: 'Community Blood Drive',
-      description: 'Give blood, give hope.',
-      date: 'September 20, 2026',
-      time: '9:00 AM – 3:00 PM',
-      location: 'City Hall',
-    ),
-    BloodDrive(
-      name: 'Red Cross Donation Day',
-      description: 'Help keep local blood supplies ready.',
-      date: 'October 4, 2026',
-      time: '8:00 AM – 2:00 PM',
-      location: 'Quezon City Sports Complex',
-    ),
-    BloodDrive(
-      name: 'Hospital Community Drive',
-      description: 'Every donation can save up to three lives.',
-      date: 'October 18, 2026',
-      time: '10:00 AM – 4:00 PM',
-      location: 'Community Hospital',
-    ),
-  ];
+  @override
+  State<UpcomingBloodActivitiesScreen> createState() =>
+      _UpcomingBloodActivitiesScreenState();
+}
+
+class _UpcomingBloodActivitiesScreenState
+    extends State<UpcomingBloodActivitiesScreen> {
+  late Future<List<BloodDrive>> _eventsFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _eventsFuture = _fetchEvents();
+  }
+
+  Future<List<BloodDrive>> _fetchEvents() async {
+    final events = await ApiService.getPublishedBloodDriveEvents();
+
+    return events.map((event) => BloodDrive.fromJson(event)).toList();
+  }
+
+  void _retryLoading() {
+    setState(() {
+      _eventsFuture = _fetchEvents();
+    });
+  }
+
+  Future<void> _refreshEvents() async {
+    final future = _fetchEvents();
+
+    setState(() {
+      _eventsFuture = future;
+    });
+
+    try {
+      await future;
+    } catch (_) {
+      // FutureBuilder displays the error message.
+    }
+  }
+
+  void _openEvent(BloodDrive activity) {
+    BloodActivityDialog.show(context, activity);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Upcoming Blood Activities')),
-      body: ListView.separated(
-        padding: const EdgeInsets.all(18),
-        itemCount: activities.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 14),
-        itemBuilder: (context, index) {
-          final activity = activities[index];
-          return _UpcomingActivityCard(activity: activity);
-        },
-      ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _showActivityDetails(context, activities.first),
-        icon: const Icon(Icons.event_available_rounded),
-        label: const Text('View first activity'),
-      ),
-    );
-  }
+    final theme = Theme.of(context);
 
-  static void _showActivityDetails(BuildContext context, BloodDrive activity) {
-    showDialog<void>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: Text(activity.name),
-        content: Text(
-          '${activity.description}\n\n'
-          '${activity.date}\n${activity.time}\n${activity.location}',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Reserve slot'),
-          ),
-        ],
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Upcoming Blood Activities'),
+      ),
+      body: FutureBuilder<List<BloodDrive>>(
+        future: _eventsFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.cloud_off_rounded,
+                      size: 48,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      'Unable to load blood drive events.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      snapshot.error
+                              ?.toString()
+                              .replaceFirst('Exception: ', '') ??
+                          'Please check your connection and try again.',
+                      textAlign: TextAlign.center,
+                      style: theme.textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: _retryLoading,
+                      icon: const Icon(Icons.refresh_rounded),
+                      label: const Text('Try Again'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
+          final activities = snapshot.data ?? <BloodDrive>[];
+
+          if (activities.isEmpty) {
+            return RefreshIndicator(
+              onRefresh: _refreshEvents,
+              child: ListView(
+                physics: const AlwaysScrollableScrollPhysics(),
+                padding: const EdgeInsets.all(24),
+                children: [
+                  const SizedBox(height: 90),
+                  Icon(
+                    Icons.event_busy_rounded,
+                    size: 56,
+                    color: theme.colorScheme.primary,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'No upcoming blood drives',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.titleMedium,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Published blood drive events will appear here.',
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 16),
+                  const Center(
+                    child: Text('Pull down to refresh.'),
+                  ),
+                ],
+              ),
+            );
+          }
+
+          return RefreshIndicator(
+            onRefresh: _refreshEvents,
+            child: ListView.separated(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.all(18),
+              itemCount: activities.length,
+              separatorBuilder: (_, _) => const SizedBox(height: 14),
+              itemBuilder: (context, index) {
+                final activity = activities[index];
+
+                return _UpcomingActivityCard(
+                  activity: activity,
+                  onTap: () => _openEvent(activity),
+                );
+              },
+            ),
+          );
+        },
       ),
     );
   }
 }
 
+// =========================================================
+// UPCOMING EVENT CARD
+// =========================================================
+
 class _UpcomingActivityCard extends StatelessWidget {
-  const _UpcomingActivityCard({required this.activity});
+  const _UpcomingActivityCard({
+    required this.activity,
+    required this.onTap,
+  });
 
   final BloodDrive activity;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
@@ -103,10 +215,7 @@ class _UpcomingActivityCard extends StatelessWidget {
     return Card(
       child: InkWell(
         borderRadius: BorderRadius.circular(AppRadius.md),
-        onTap: () => UpcomingBloodActivitiesScreen._showActivityDetails(
-          context,
-          activity,
-        ),
+        onTap: onTap,
         child: Padding(
           padding: const EdgeInsets.all(18),
           child: Column(
@@ -117,7 +226,9 @@ class _UpcomingActivityCard extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(11),
                     decoration: BoxDecoration(
-                      color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                      color: theme.colorScheme.primary.withValues(
+                        alpha: 0.12,
+                      ),
                       borderRadius: BorderRadius.circular(AppRadius.sm),
                     ),
                     child: Icon(
@@ -139,7 +250,12 @@ class _UpcomingActivityCard extends StatelessWidget {
                 ],
               ),
               const SizedBox(height: 14),
-              Text(activity.description, style: theme.textTheme.bodyMedium),
+              Text(
+                activity.description.isNotEmpty
+                    ? activity.description
+                    : 'Give blood, give hope.',
+                style: theme.textTheme.bodyMedium,
+              ),
               const SizedBox(height: 12),
               _ActivityDetailRow(
                 icon: Icons.calendar_today_outlined,
@@ -155,6 +271,15 @@ class _UpcomingActivityCard extends StatelessWidget {
                 icon: Icons.location_on_outlined,
                 label: activity.location,
               ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: onTap,
+                  icon: const Icon(Icons.event_available_rounded),
+                  label: const Text('View Activity'),
+                ),
+              ),
             ],
           ),
         ),
@@ -163,8 +288,15 @@ class _UpcomingActivityCard extends StatelessWidget {
   }
 }
 
+// =========================================================
+// EVENT DETAIL ROW
+// =========================================================
+
 class _ActivityDetailRow extends StatelessWidget {
-  const _ActivityDetailRow({required this.icon, required this.label});
+  const _ActivityDetailRow({
+    required this.icon,
+    required this.label,
+  });
 
   final IconData icon;
   final String label;
@@ -173,13 +305,24 @@ class _ActivityDetailRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, size: 17, color: Theme.of(context).colorScheme.primary),
+        Icon(
+          icon,
+          size: 17,
+          color: Theme.of(context).colorScheme.primary,
+        ),
         const SizedBox(width: 8),
-        Expanded(child: Text(label)),
+        Expanded(
+          child: Text(label),
+        ),
       ],
     );
   }
 }
+
+// =========================================================
+// BLOOD REQUEST CARD STATE
+// Keep the existing donor request functionality.
+// =========================================================
 
 class _DonationActivityCardState extends State<DonationActivityCard> {
   bool _showProfile = false;
@@ -219,10 +362,10 @@ class _DonationActivityCardState extends State<DonationActivityCard> {
                       Text(
                         'BLOOD REQUEST',
                         style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          color: colorScheme.primary,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 0.8,
-                        ),
+                              color: colorScheme.primary,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 0.8,
+                            ),
                       ),
                       const SizedBox(height: 3),
                       Text(
@@ -287,14 +430,19 @@ class _DonationActivityCardState extends State<DonationActivityCard> {
               children: [
                 Expanded(
                   child: OutlinedButton.icon(
-                    onPressed: () =>
-                        setState(() => _showProfile = !_showProfile),
+                    onPressed: () {
+                      setState(() {
+                        _showProfile = !_showProfile;
+                      });
+                    },
                     icon: Icon(
                       _showProfile
                           ? Icons.keyboard_arrow_up_rounded
                           : Icons.person_outline_rounded,
                     ),
-                    label: Text(_showProfile ? 'Hide details' : 'View details'),
+                    label: Text(
+                      _showProfile ? 'Hide details' : 'View details',
+                    ),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -356,8 +504,15 @@ class _DonationActivityCardState extends State<DonationActivityCard> {
   }
 }
 
+// =========================================================
+// SUMMARY ITEM
+// =========================================================
+
 class _SummaryItem extends StatelessWidget {
-  const _SummaryItem({required this.icon, required this.label});
+  const _SummaryItem({
+    required this.icon,
+    required this.label,
+  });
 
   final IconData icon;
   final String label;
@@ -385,6 +540,10 @@ class _SummaryItem extends StatelessWidget {
   }
 }
 
+// =========================================================
+// REQUEST BADGE
+// =========================================================
+
 class _RequestBadge extends StatelessWidget {
   const _RequestBadge({
     required this.icon,
@@ -399,11 +558,16 @@ class _RequestBadge extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      padding: const EdgeInsets.symmetric(
+        horizontal: 10,
+        vertical: 6,
+      ),
       decoration: BoxDecoration(
         color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
+        border: Border.all(
+          color: color.withValues(alpha: 0.3),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -424,8 +588,16 @@ class _RequestBadge extends StatelessWidget {
   }
 }
 
+// =========================================================
+// DONOR INFORMATION ROW
+// =========================================================
+
 class InfoRow extends StatelessWidget {
-  const InfoRow({super.key, required this.icon, required this.label});
+  const InfoRow({
+    super.key,
+    required this.icon,
+    required this.label,
+  });
 
   final IconData icon;
   final String label;
@@ -443,15 +615,19 @@ class InfoRow extends StatelessWidget {
         Expanded(
           child: Text(
             label,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600),
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
           ),
         ),
       ],
     );
   }
 }
+
+// =========================================================
+// HELPER FUNCTIONS
+// =========================================================
 
 Color _urgencyColor(String urgency) {
   switch (urgency.toLowerCase()) {
