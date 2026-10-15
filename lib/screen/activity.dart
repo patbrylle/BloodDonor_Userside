@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../model/blood_drive.dart';
 import '../services/api_service.dart';
@@ -239,6 +240,55 @@ Color _activityStatusColor(
   }
 }
 
+
+Future<void> _callDonor(String phone) async {
+  final number = phone.trim();
+
+  if (number.isEmpty) return;
+
+  final uri = Uri(
+    scheme: 'tel',
+    path: number,
+  );
+
+  try {
+    final opened = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!opened) {
+      debugPrint('Could not open the phone dialer: $number');
+    }
+  } catch (e) {
+    debugPrint('Error opening the phone dialer: $e');
+  }
+}
+
+Future<void> _messageDonor(String phone) async {
+  final number = phone.trim();
+
+  if (number.isEmpty) return;
+
+  final uri = Uri(
+    scheme: 'sms',
+    path: number,
+  );
+
+  try {
+    final opened = await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    );
+
+    if (!opened) {
+      debugPrint('Could not open the messaging app: $number');
+    }
+  } catch (e) {
+    debugPrint('Error opening the messaging app: $e');
+  }
+}
+
 Widget _activityLoading() {
   return const Center(
     child: CircularProgressIndicator(),
@@ -338,37 +388,51 @@ class _UpcomingTab extends StatefulWidget {
 }
 
 class _UpcomingTabState extends State<_UpcomingTab> {
-  late Future<List<BloodDrive>> _eventsFuture;
+  late Future<_UpcomingActivityData> _upcomingFuture;
 
   @override
   void initState() {
     super.initState();
-    _loadEvents();
+    _loadUpcoming();
   }
 
-  void _loadEvents() {
-    _eventsFuture = _fetchEvents();
+  void _loadUpcoming() {
+    _upcomingFuture = _fetchUpcoming();
   }
 
-  Future<List<BloodDrive>> _fetchEvents() async {
-    final events = await ApiService.getPublishedBloodDriveEvents();
+  Future<_UpcomingActivityData> _fetchUpcoming() async {
+    final results = await Future.wait([
+      ApiService.getPublishedBloodDriveEvents(),
+      ApiService.getMyAppointments(),
+    ]);
 
-    return events
-        .map((event) => BloodDrive.fromJson(event))
+    final events = (results[0] as List)
+        .map((item) => BloodDrive.fromJson(
+              _asActivityMap(item),
+            ))
         .toList();
+
+    final appointments = (results[1] as List)
+        .map((item) => _asActivityMap(item))
+        .toList();
+
+    return _UpcomingActivityData(
+      events: events,
+      appointments: appointments,
+    );
   }
 
-  Future<void> _refreshEvents() async {
-    final future = _fetchEvents();
+  Future<void> _refreshUpcoming() async {
+    final future = _fetchUpcoming();
 
     setState(() {
-      _eventsFuture = future;
+      _upcomingFuture = future;
     });
 
     try {
       await future;
     } catch (_) {
-      // FutureBuilder displays the error.
+      // FutureBuilder displays any error.
     }
   }
 
@@ -376,8 +440,8 @@ class _UpcomingTabState extends State<_UpcomingTab> {
   Widget build(BuildContext context) {
     final theme = widget.theme;
 
-    return FutureBuilder<List<BloodDrive>>(
-      future: _eventsFuture,
+    return FutureBuilder<_UpcomingActivityData>(
+      future: _upcomingFuture,
       builder: (context, snapshot) {
         if (snapshot.connectionState == ConnectionState.waiting) {
           return _activityLoading();
@@ -386,106 +450,254 @@ class _UpcomingTabState extends State<_UpcomingTab> {
         if (snapshot.hasError) {
           return _activityError(
             error: snapshot.error!,
-            onRetry: () => setState(_loadEvents),
+            onRetry: () => setState(_loadUpcoming),
           );
         }
 
-        final events = snapshot.data ?? <BloodDrive>[];
+        final data = snapshot.data!;
+        final appointments = data.appointments;
+        final events = data.events;
 
-        if (events.isEmpty) {
+        if (appointments.isEmpty && events.isEmpty) {
           return _activityEmpty(
             context: context,
             icon: Icons.event_busy_rounded,
-            title: 'No upcoming blood drives',
-            message: 'Published blood drive events will appear here.',
-            onRefresh: () => setState(_loadEvents),
+            title: 'No upcoming activities',
+            message:
+                'Your booked donation appointments and upcoming blood drives will appear here.',
+            onRefresh: () => setState(_loadUpcoming),
           );
         }
 
         return RefreshIndicator(
-          onRefresh: _refreshEvents,
-          child: ListView.separated(
+          onRefresh: _refreshUpcoming,
+          child: ListView(
             physics: const AlwaysScrollableScrollPhysics(),
             padding: EdgeInsets.zero,
-            itemCount: events.length,
-            separatorBuilder: (_, _) => const SizedBox(height: 10),
-            itemBuilder: (context, index) {
-              final event = events[index];
-
-              return Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Icon(
-                            Icons.event_available_rounded,
-                            color: theme.colorScheme.primary,
-                            size: 30,
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Text(
-                              event.name,
-                              style: theme.textTheme.titleMedium,
-                            ),
-                          ),
-                        ],
-                      ),
-                      if (event.description.isNotEmpty) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          event.description,
-                          style: theme.textTheme.bodyMedium,
-                        ),
-                      ],
-                      const SizedBox(height: 14),
-                      _ActivityInfo(
-                        icon: Icons.calendar_today_outlined,
-                        text: event.date.isNotEmpty
-                            ? event.date
-                            : 'Date not available',
-                      ),
-                      const SizedBox(height: 9),
-                      _ActivityInfo(
-                        icon: Icons.access_time_outlined,
-                        text: event.time.isNotEmpty
-                            ? event.time
-                            : 'Time not available',
-                      ),
-                      const SizedBox(height: 9),
-                      _ActivityInfo(
-                        icon: Icons.location_on_outlined,
-                        text: event.location.isNotEmpty
-                            ? event.location
-                            : 'Venue not available',
-                      ),
-                      const SizedBox(height: 16),
-                      SizedBox(
-                        width: double.infinity,
-                        child: FilledButton.icon(
-                          onPressed: () {
-                            BloodActivityDialog.show(context, event);
-                          },
-                          icon: const Icon(
-                            Icons.event_available_rounded,
-                          ),
-                          label: const Text('View activity'),
-                        ),
-                      ),
-                    ],
+            children: [
+              if (appointments.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    'My Donation Appointments',
+                    style: theme.textTheme.titleMedium,
                   ),
                 ),
-              );
-            },
+                ...appointments.map(
+                  (appointment) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: _MyAppointmentCard(
+                      appointment: appointment,
+                      theme: theme,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+              ],
+              if (events.isNotEmpty) ...[
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 10),
+                  child: Text(
+                    'Upcoming Blood Drives',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
+                ...events.map(
+                  (event) => Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(18),
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.event_available_rounded,
+                                  color: theme.colorScheme.primary,
+                                  size: 30,
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    event.name,
+                                    style: theme.textTheme.titleMedium,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            if (event.description.isNotEmpty) ...[
+                              const SizedBox(height: 8),
+                              Text(event.description),
+                            ],
+                            const SizedBox(height: 14),
+                            _ActivityInfo(
+                              icon: Icons.calendar_today_outlined,
+                              text: event.date.isNotEmpty
+                                  ? event.date
+                                  : 'Date not available',
+                            ),
+                            const SizedBox(height: 9),
+                            _ActivityInfo(
+                              icon: Icons.access_time_outlined,
+                              text: event.time.isNotEmpty
+                                  ? event.time
+                                  : 'Time not available',
+                            ),
+                            const SizedBox(height: 9),
+                            _ActivityInfo(
+                              icon: Icons.location_on_outlined,
+                              text: event.location.isNotEmpty
+                                  ? event.location
+                                  : 'Venue not available',
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              child: FilledButton.icon(
+                                onPressed: () {
+                                  BloodActivityDialog.show(
+                                    context,
+                                    event,
+                                  );
+                                },
+                                icon: const Icon(
+                                  Icons.event_available_rounded,
+                                ),
+                                label: const Text('View activity'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
           ),
         );
       },
     );
   }
 }
+
+class _UpcomingActivityData {
+  const _UpcomingActivityData({
+    required this.events,
+    required this.appointments,
+  });
+
+  final List<BloodDrive> events;
+  final List<Map<String, dynamic>> appointments;
+}
+
+class _MyAppointmentCard extends StatelessWidget {
+  const _MyAppointmentCard({
+    required this.appointment,
+    required this.theme,
+  });
+
+  final Map<String, dynamic> appointment;
+  final ThemeData theme;
+
+  @override
+  Widget build(BuildContext context) {
+    final center = _activityValue(
+      appointment,
+      ['center'],
+      fallback: 'Donation center',
+    );
+
+    final date = _formatActivityDate(
+      appointment['appointment_date'],
+    );
+
+    final rawTime = _activityValue(
+      appointment,
+      ['appointment_time'],
+      fallback: 'Time not available',
+    );
+
+    final time = rawTime.length >= 5 &&
+            RegExp(r'^\d{2}:\d{2}').hasMatch(rawTime)
+        ? rawTime.substring(0, 5)
+        : rawTime;
+
+    final status = _activityValue(
+      appointment,
+      ['status'],
+      fallback: 'pending',
+    );
+
+    final notes = _activityValue(appointment, ['notes']);
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.calendar_month_rounded,
+                  size: 30,
+                  color: theme.colorScheme.primary,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Blood Donation Appointment',
+                    style: theme.textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: _StatusChip(
+                status: status,
+                color: _activityStatusColor(status, theme),
+              ),
+            ),
+            const SizedBox(height: 16),
+            _ActivityInfo(
+              icon: Icons.location_on_outlined,
+              text: center,
+            ),
+            const SizedBox(height: 10),
+            _ActivityInfo(
+              icon: Icons.calendar_today_outlined,
+              text: date,
+            ),
+            const SizedBox(height: 10),
+            _ActivityInfo(
+              icon: Icons.access_time_outlined,
+              text: time,
+            ),
+            if (notes.isNotEmpty) ...[
+              const SizedBox(height: 10),
+              _ActivityInfo(
+                icon: Icons.notes_rounded,
+                text: notes,
+              ),
+            ],
+            const SizedBox(height: 12),
+            Text(
+              'Appointment ID: ${appointment['id'] ?? 'N/A'}',
+              style: theme.textTheme.bodySmall,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 
 // =========================================================
 // MY JOINED EVENTS
@@ -892,10 +1104,17 @@ class _MyRequestsTabState extends State<_MyRequestsTab> {
                         text:
                             'Submitted: ${_formatActivityDate(request['created_at'])}',
                       ),
+                     
+                      // Show confirmed donors for this request.
+                      ..._confirmedDonorWidgets(
+                        request: request,
+                        theme: theme,
+                      ),
                       const SizedBox(height: 12),
                       Container(
                         width: double.infinity,
                         padding: const EdgeInsets.all(12),
+
                         decoration: BoxDecoration(
                           color: color.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(AppRadius.sm),
@@ -917,6 +1136,130 @@ class _MyRequestsTabState extends State<_MyRequestsTab> {
       },
     );
   }
+}
+
+List<Widget> _confirmedDonorWidgets({
+  required Map<String, dynamic> request,
+  required ThemeData theme,
+}) {
+  final rawDonations = request['donations'];
+
+  if (rawDonations is! List) {
+    return const <Widget>[];
+  }
+
+  final confirmedDonations = rawDonations
+      .whereType<Map>()
+      .map((item) => Map<String, dynamic>.from(item))
+      .where((donation) {
+        final status = (donation['status'] ?? '')
+            .toString()
+            .toLowerCase()
+            .trim();
+
+        return status == 'confirmed' || status == 'completed';
+      })
+      .toList();
+
+  if (confirmedDonations.isEmpty) {
+    return const <Widget>[];
+  }
+
+  return [
+    const SizedBox(height: 16),
+    Text(
+      'Confirmed Donors',
+      style: theme.textTheme.titleMedium,
+    ),
+    const SizedBox(height: 8),
+    ...confirmedDonations.map((donation) {
+      final donor = _asActivityMap(donation['donor']);
+      final user = _asActivityMap(donor['user']);
+
+      final name = _activityValue(
+        user,
+        ['name'],
+        fallback: 'Confirmed donor',
+      );
+
+      final phone = _activityValue(
+        donor,
+        ['phone'],
+      );
+
+      final donorBloodType = _activityValue(
+        donor,
+        ['blood_type'],
+        fallback: 'N/A',
+      );
+
+      final donationStatus = _activityValue(
+        donation,
+        ['status'],
+        fallback: 'confirmed',
+      );
+
+      return Card(
+        margin: const EdgeInsets.only(bottom: 8),
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor:
+                        theme.colorScheme.primary.withValues(alpha: 0.12),
+                    child: Icon(
+                      Icons.person_rounded,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          name,
+                          style: theme.textTheme.titleSmall,
+                        ),
+                        Text('Blood type: $donorBloodType'),
+                        Text('Status: $donationStatus'),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                phone.isEmpty ? 'Phone: Not available' : 'Phone: $phone',
+              ),
+              if (phone.trim().isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: () => _callDonor(phone),
+                      icon: const Icon(Icons.call_rounded),
+                      label: const Text('Call'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: () => _messageDonor(phone),
+                      icon: const Icon(Icons.message_rounded),
+                      label: const Text('Message'),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        ),
+      );
+    }),
+  ];
 }
 
 // =========================================================

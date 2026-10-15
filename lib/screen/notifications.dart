@@ -1,5 +1,7 @@
+
 import 'package:flutter/material.dart';
 
+import '../services/api_service.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 
@@ -11,104 +13,303 @@ class NotificationsScreen extends StatefulWidget {
 }
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
-  final List<_NotificationItem> _notifications = [
-    _NotificationItem(
-      icon: Icons.water_drop_rounded,
-      title: 'Your next donation date is coming up',
-      message: 'You may be eligible to donate again on September 20, 2026.',
-      time: 'Today',
-      color: AppColors.primary,
-    ),
-    _NotificationItem(
-      icon: Icons.bloodtype_rounded,
-      title: 'Urgent blood request nearby',
-      message:
-          'A patient needs O+ blood. Check the request and help if you can.',
-      time: 'Yesterday',
-      color: AppColors.critical,
-    ),
-    _NotificationItem(
-      icon: Icons.favorite_rounded,
-      title: 'Your donation makes a difference',
-      message:
-          'One donation can help save up to three lives. Thank you, Brylle!',
-      time: '3 days ago',
-      color: AppColors.success,
-    ),
-  ];
+  List<_NotificationItem> _notifications = [];
+  bool _isLoading = true;
+  bool _isMarkingAllRead = false;
+  String? _error;
 
-  void _markAllAsRead() {
-    setState(() {
-      for (final notification in _notifications) {
-        notification.isRead = true;
+  int get _unreadCount =>
+      _notifications.where((notification) => !notification.isRead).length;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadNotifications();
+  }
+
+  Future<void> _loadNotifications() async {
+    if (mounted) {
+      setState(() {
+        _isLoading = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final response = await ApiService.getNotifications();
+      final rawNotifications = response['notifications'];
+
+      if (rawNotifications is! List) {
+        throw Exception('The server returned invalid notification data.');
       }
-    });
+
+      final items = rawNotifications
+          .whereType<Map>()
+          .map(
+            (item) => _NotificationItem.fromJson(
+              Map<String, dynamic>.from(item),
+            ),
+          )
+          .toList();
+
+      if (!mounted) return;
+
+      setState(() {
+        _notifications = items;
+        _isLoading = false;
+      });
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() {
+        _error = error.toString().replaceFirst('Exception: ', '');
+        _isLoading = false;
+      });
+    }
+  }
+
+  Future<void> _markAsRead(_NotificationItem notification) async {
+    if (notification.isRead) return;
+
+    final index = _notifications.indexWhere(
+      (item) => item.id == notification.id,
+    );
+    if (index == -1) return;
+
+    try {
+      await ApiService.markNotificationAsRead(notification.id);
+
+      if (!mounted) return;
+
+      setState(() {
+        _notifications[index].isRead = true;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      _showMessage(
+        error.toString().replaceFirst('Exception: ', ''),
+      );
+    }
+  }
+
+  Future<void> _markAllAsRead() async {
+    if (_unreadCount == 0 || _isMarkingAllRead) return;
+
+    setState(() => _isMarkingAllRead = true);
+
+    try {
+      await ApiService.markAllNotificationsAsRead();
+
+      if (!mounted) return;
+
+      setState(() {
+        for (final notification in _notifications) {
+          notification.isRead = true;
+        }
+        _isMarkingAllRead = false;
+      });
+
+      _showMessage('All notifications marked as read.');
+    } catch (error) {
+      if (!mounted) return;
+
+      setState(() => _isMarkingAllRead = false);
+      _showMessage(
+        error.toString().replaceFirst('Exception: ', ''),
+      );
+    }
+  }
+
+  void _showMessage(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final unreadCount = _notifications.where((item) => !item.isRead).length;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Notifications'),
         actions: [
-          if (unreadCount > 0)
+          if (_unreadCount > 0)
             TextButton(
-              onPressed: _markAllAsRead,
-              child: const Text('Mark all read'),
+              onPressed: _isMarkingAllRead ? null : _markAllAsRead,
+              child: _isMarkingAllRead
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Mark all read'),
             ),
         ],
       ),
-      body: _notifications.isEmpty
-          ? _EmptyNotifications(theme: theme)
-          : ListView(
-              padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
-              children: [
-                Text(
-                  unreadCount == 0
-                      ? 'You’re all caught up'
-                      : '$unreadCount new notification${unreadCount == 1 ? '' : 's'}',
-                  style: theme.textTheme.titleMedium,
-                ),
-                const SizedBox(height: 14),
-                ..._notifications.map(
-                  (notification) => Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: _NotificationCard(
-                      notification: notification,
-                      onTap: () => setState(() {
-                        notification.isRead = true;
-                      }),
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? _ErrorNotifications(
+                  message: _error!,
+                  onRetry: _loadNotifications,
+                )
+              : _notifications.isEmpty
+                  ? RefreshIndicator(
+                      onRefresh: _loadNotifications,
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        children: const [
+                          SizedBox(height: 150),
+                          _EmptyNotifications(),
+                        ],
+                      ),
+                    )
+                  : RefreshIndicator(
+                      onRefresh: _loadNotifications,
+                      child: ListView(
+                        physics: const AlwaysScrollableScrollPhysics(),
+                        padding: const EdgeInsets.fromLTRB(18, 8, 18, 24),
+                        children: [
+                          Text(
+                            _unreadCount == 0
+                                ? 'You’re all caught up'
+                                : '$_unreadCount new notification'
+                                    '${_unreadCount == 1 ? '' : 's'}',
+                            style: theme.textTheme.titleMedium,
+                          ),
+                          const SizedBox(height: 14),
+                          ..._notifications.map(
+                            (notification) => Padding(
+                              padding: const EdgeInsets.only(bottom: 12),
+                              child: _NotificationCard(
+                                notification: notification,
+                                onTap: () => _markAsRead(notification),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                ),
-              ],
-            ),
     );
   }
 }
 
 class _NotificationItem {
   _NotificationItem({
-    required this.icon,
+    required this.id,
     required this.title,
     required this.message,
     required this.time,
     required this.color,
+    required this.icon,
+    required this.isRead,
   });
 
-  final IconData icon;
+  final String id;
   final String title;
   final String message;
   final String time;
   final Color color;
-  bool isRead = false;
+  final IconData icon;
+  bool isRead;
+
+  factory _NotificationItem.fromJson(Map<String, dynamic> json) {
+    final data = json['data'] is Map
+        ? Map<String, dynamic>.from(json['data'] as Map)
+        : <String, dynamic>{};
+
+    final type = (json['type'] ?? '').toString();
+    final title = (data['title'] ?? data['subject'] ?? 'Notification')
+        .toString();
+    final message =
+        (data['message'] ?? data['body'] ?? data['description'] ?? '')
+            .toString();
+
+    final createdAt = DateTime.tryParse(
+      (json['created_at'] ?? '').toString(),
+    );
+
+    return _NotificationItem(
+      id: (json['id'] ?? '').toString(),
+      title: title,
+      message: message.isEmpty ? _friendlyType(type) : message,
+      time: _formatTime(createdAt),
+      color: _notificationColor(type),
+      icon: _notificationIcon(type),
+      isRead: json['read_at'] != null,
+    );
+  }
+
+  static String _friendlyType(String type) {
+    final name = type.split(r'\').last.split('.').last;
+    return name
+        .replaceAllMapped(
+          RegExp(r'([a-z])([A-Z])'),
+          (match) => '${match[1]} ${match[2]}',
+        )
+        .replaceAll('_', ' ');
+  }
+
+  static String _formatTime(DateTime? date) {
+    if (date == null) return '';
+
+    final localDate = date.toLocal();
+    final difference = DateTime.now().difference(localDate);
+
+    if (difference.isNegative || difference.inMinutes < 1) {
+      return 'Just now';
+    }
+    if (difference.inMinutes < 60) {
+      return '${difference.inMinutes} min ago';
+    }
+    if (difference.inHours < 24) {
+      return '${difference.inHours} hr ago';
+    }
+    if (difference.inDays == 1) {
+      return 'Yesterday';
+    }
+    if (difference.inDays < 7) {
+      return '${difference.inDays} days ago';
+    }
+
+    return '${localDate.day}/${localDate.month}/${localDate.year}';
+  }
+
+  static IconData _notificationIcon(String type) {
+    final value = type.toLowerCase();
+
+    if (value.contains('blood') || value.contains('request')) {
+      return Icons.bloodtype_rounded;
+    }
+    if (value.contains('donat')) return Icons.water_drop_rounded;
+    if (value.contains('appointment')) return Icons.calendar_month_rounded;
+    if (value.contains('success') || value.contains('approved')) {
+      return Icons.check_circle_rounded;
+    }
+
+    return Icons.notifications_active_rounded;
+  }
+
+  static Color _notificationColor(String type) {
+    final value = type.toLowerCase();
+
+    if (value.contains('urgent') || value.contains('critical')) {
+      return AppColors.critical;
+    }
+    if (value.contains('success') || value.contains('approved')) {
+      return AppColors.success;
+    }
+
+    return AppColors.primary;
+  }
 }
 
 class _NotificationCard extends StatelessWidget {
-  const _NotificationCard({required this.notification, required this.onTap});
+  const _NotificationCard({
+    required this.notification,
+    required this.onTap,
+  });
 
   final _NotificationItem notification;
   final VoidCallback onTap;
@@ -136,7 +337,10 @@ class _NotificationCard extends StatelessWidget {
                   color: notification.color.withValues(alpha: 0.12),
                   shape: BoxShape.circle,
                 ),
-                child: Icon(notification.icon, color: notification.color),
+                child: Icon(
+                  notification.icon,
+                  color: notification.color,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -195,12 +399,12 @@ class _NotificationCard extends StatelessWidget {
 }
 
 class _EmptyNotifications extends StatelessWidget {
-  const _EmptyNotifications({required this.theme});
-
-  final ThemeData theme;
+  const _EmptyNotifications();
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(32),
@@ -213,12 +417,63 @@ class _EmptyNotifications extends StatelessWidget {
               color: theme.colorScheme.primary,
             ),
             const SizedBox(height: 16),
-            Text('No notifications yet', style: theme.textTheme.titleLarge),
+            Text(
+              'No notifications yet',
+              style: theme.textTheme.titleLarge,
+            ),
             const SizedBox(height: 8),
             Text(
               'We’ll let you know when something needs your attention.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyMedium,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorNotifications extends StatelessWidget {
+  const _ErrorNotifications({
+    required this.message,
+    required this.onRetry,
+  });
+
+  final String message;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.cloud_off_rounded,
+              size: 56,
+              color: theme.colorScheme.error,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'Could not load notifications',
+              style: theme.textTheme.titleMedium,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 18),
+            FilledButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try again'),
             ),
           ],
         ),

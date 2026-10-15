@@ -4,6 +4,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../model/blood_donor.dart';
 import '../services/api_service.dart';
+import 'package:geolocator/geolocator.dart';
 
 class BloodRequestScreen extends StatefulWidget {
   const BloodRequestScreen({super.key});
@@ -91,274 +92,397 @@ class _BloodRequestScreenState extends State<BloodRequestScreen> {
     }).toList();
   }
 
-  Future<void> _openRequestForm() async {
-    final formKey = GlobalKey<FormState>();
+ 
+Future<void> _openRequestForm() async {
+  List<Map<String, dynamic>> donationCenters;
 
-    final patientNameController = TextEditingController();
-    final hospitalController = TextEditingController();
-    final notesController = TextEditingController();
+  try {
+    donationCenters = await ApiService.getOpenDonationCenters();
+  } catch (e) {
+    if (!mounted) return;
 
-    String selectedBloodType = 'O+';
-    int unitsNeeded = 1;
-    String urgency = 'Normal';
-    bool isSubmitting = false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Could not load donation centers: $e')),
+    );
+    return;
+  }
 
-    try {
-      final submitted = await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) {
-          return StatefulBuilder(
-            builder: (context, setDialogState) {
-              return AlertDialog(
-                title: const Text('Make a Blood Request'),
-                content: SingleChildScrollView(
-                  child: Form(
-                    key: formKey,
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        TextFormField(
-                          controller: patientNameController,
-                          textCapitalization:
-                              TextCapitalization.words,
-                          decoration: const InputDecoration(
-                            labelText: 'Patient Name',
-                            prefixIcon: Icon(Icons.person),
-                            border: OutlineInputBorder(),
-                          ),
-                          validator: (value) {
-                            if (value == null ||
-                                value.trim().isEmpty) {
-                              return 'Please enter the patient name.';
-                            }
-                            return null;
-                          },
-                        ),
-                        const SizedBox(height: 16),
+  // Only use centers with valid integer IDs.
+  donationCenters = donationCenters.where((center) {
+    return int.tryParse(center['id']?.toString() ?? '') != null;
+  }).toList();
 
-                        DropdownButtonFormField<String>(
-                          initialValue: selectedBloodType,
-                          decoration: const InputDecoration(
-                            labelText: 'Required Blood Type',
-                            prefixIcon: Icon(Icons.bloodtype),
-                            border: OutlineInputBorder(),
-                          ),
-                          items: _bloodTypes
-                              .where((type) => type != 'All')
-                              .map((type) {
-                            return DropdownMenuItem(
-                              value: type,
-                              child: Text(type),
-                            );
-                          }).toList(),
-                          onChanged: isSubmitting
-                              ? null
-                              : (value) {
-                                  if (value != null) {
-                                    setDialogState(() {
-                                      selectedBloodType = value;
-                                    });
-                                  }
-                                },
-                        ),
-                        const SizedBox(height: 16),
+  if (donationCenters.isEmpty) {
+    if (!mounted) return;
 
-                        DropdownButtonFormField<int>(
-                          initialValue: unitsNeeded,
-                          decoration: const InputDecoration(
-                            labelText: 'Units Needed',
-                            prefixIcon: Icon(Icons.medical_services),
-                            border: OutlineInputBorder(),
-                          ),
-                          items: List.generate(5, (index) {
-                            final units = index + 1;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('No available donation centers were found.'),
+      ),
+    );
+    return;
+  }
 
-                            return DropdownMenuItem<int>(
-                              value: units,
-                              child: Text(
-                                '$units ${units == 1 ? 'unit' : 'units'}',
-                              ),
-                            );
-                          }),
-                          onChanged: isSubmitting
-                              ? null
-                              : (value) {
-                                  if (value != null) {
-                                    setDialogState(() {
-                                      unitsNeeded = value;
-                                    });
-                                  }
-                                },
-                        ),
-                        const SizedBox(height: 16),
+  Position? userPosition;
 
-                        TextFormField(
-                          controller: hospitalController,
-                          textCapitalization:
-                              TextCapitalization.words,
-                          decoration: const InputDecoration(
-                            labelText: 'Hospital / Location',
-                            prefixIcon: Icon(Icons.local_hospital),
-                            border: OutlineInputBorder(),
-                          ),
-                          validator: (value) {
-                            if (value == null ||
-                                value.trim().isEmpty) {
-                              return 'Please enter the hospital or location.';
-                            }
-                            return null;
-                          },
-                        ),
-                        const SizedBox(height: 16),
+  // Try to get the user's location. If unavailable, continue without it.
+  try {
+    final serviceEnabled = await Geolocator.isLocationServiceEnabled();
 
-                        DropdownButtonFormField<String>(
-                          initialValue: urgency,
-                          decoration: const InputDecoration(
-                            labelText: 'Urgency',
-                            prefixIcon: Icon(Icons.priority_high),
-                            border: OutlineInputBorder(),
-                          ),
-                          items: const [
-                            DropdownMenuItem(
-                              value: 'Normal',
-                              child: Text('Normal'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'Urgent',
-                              child: Text('Urgent'),
-                            ),
-                            DropdownMenuItem(
-                              value: 'Critical',
-                              child: Text('Critical'),
-                            ),
-                          ],
-                          onChanged: isSubmitting
-                              ? null
-                              : (value) {
-                                  if (value != null) {
-                                    setDialogState(() {
-                                      urgency = value;
-                                    });
-                                  }
-                                },
-                        ),
-                        const SizedBox(height: 16),
+    if (serviceEnabled) {
+      var permission = await Geolocator.checkPermission();
 
-                        TextFormField(
-                          controller: notesController,
-                          maxLines: 3,
-                          textCapitalization:
-                              TextCapitalization.sentences,
-                          decoration: const InputDecoration(
-                            labelText: 'Additional Notes (Optional)',
-                            prefixIcon: Icon(Icons.notes),
-                            border: OutlineInputBorder(),
-                            alignLabelWithHint: true,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: isSubmitting
-                        ? null
-                        : () {
-                            Navigator.of(dialogContext).pop(false);
-                          },
-                    child: const Text('Cancel'),
-                  ),
-                  FilledButton(
-                    onPressed: isSubmitting
-                        ? null
-                        : () async {
-                            if (!formKey.currentState!.validate()) {
-                              return;
-                            }
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
 
-                            setDialogState(() {
-                              isSubmitting = true;
-                            });
-
-                            try {
-                              final notes = [
-                                if (urgency != 'Normal')
-                                  'Urgency: $urgency',
-                                if (notesController.text.trim().isNotEmpty)
-                                  notesController.text.trim(),
-                              ].join('\n');
-
-                              await ApiService.createBloodRequest(
-                                patientName:
-                                    patientNameController.text.trim(),
-                                bloodType: selectedBloodType,
-                                unitsNeeded: unitsNeeded,
-                                hospital: hospitalController.text.trim(),
-                                notes: notes.isEmpty ? null : notes,
-                              );
-
-                              if (!dialogContext.mounted) return;
-
-                              Navigator.of(dialogContext).pop(true);
-                            } catch (e) {
-                              if (!dialogContext.mounted) return;
-
-                              setDialogState(() {
-                                isSubmitting = false;
-                              });
-
-                              ScaffoldMessenger.of(dialogContext)
-                                  .showSnackBar(
-                                SnackBar(
-                                  content: Text(
-                                    e.toString().replaceFirst(
-                                          'Exception: ',
-                                          '',
-                                        ),
-                                  ),
-                                ),
-                              );
-                            }
-                          },
-                    child: isSubmitting
-                        ? const SizedBox(
-                            height: 20,
-                            width: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : const Text('Submit Request'),
-                  ),
-                ],
-              );
-            },
-          );
-        },
-      );
-
-      if (!mounted) return;
-
-      if (submitted == true) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Blood request submitted successfully.',
-            ),
-            backgroundColor: Colors.green,
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
+        userPosition = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 15),
           ),
         );
-
-        await _loadDonors();
       }
-    } finally {
-      patientNameController.dispose();
-      hospitalController.dispose();
-      notesController.dispose();
     }
+  } catch (_) {
+    // The user can still choose a center without GPS.
   }
+
+  double distanceKmFor(Map<String, dynamic> center) {
+    if (userPosition == null) return double.infinity;
+
+    final latitude =
+        double.tryParse(center['latitude']?.toString() ?? '');
+    final longitude =
+        double.tryParse(center['longitude']?.toString() ?? '');
+
+    if (latitude == null ||
+        longitude == null ||
+        latitude < -90 ||
+        latitude > 90 ||
+        longitude < -180 ||
+        longitude > 180) {
+      return double.infinity;
+    }
+
+   return Geolocator.distanceBetween(
+      userPosition.latitude,
+      userPosition.longitude,
+      latitude,
+      longitude,
+    ) /
+    1000;
+  }
+
+  // Nearest center first. Centers without GPS coordinates go last.
+  donationCenters.sort((a, b) {
+    final distanceComparison =
+        distanceKmFor(a).compareTo(distanceKmFor(b));
+
+    if (distanceComparison != 0) return distanceComparison;
+
+    return (a['name']?.toString() ?? '')
+        .compareTo(b['name']?.toString() ?? '');
+  });
+
+  final formKey = GlobalKey<FormState>();
+  final patientNameController = TextEditingController();
+  final notesController = TextEditingController();
+
+  int? selectedDonationCenterId =
+      int.tryParse(donationCenters.first['id'].toString());
+
+  String selectedBloodType = 'O+';
+  int unitsNeeded = 1;
+  String urgency = 'Normal';
+  bool isSubmitting = false;
+if (!mounted) return;
+
+try {
+  final submitted = await showDialog<bool>(
+    context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: const Text('Make a Blood Request'),
+              content: SingleChildScrollView(
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: patientNameController,
+                        textCapitalization: TextCapitalization.words,
+                        decoration: const InputDecoration(
+                          labelText: 'Patient Name',
+                          prefixIcon: Icon(Icons.person),
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Please enter the patient name.';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedBloodType,
+                        decoration: const InputDecoration(
+                          labelText: 'Required Blood Type',
+                          prefixIcon: Icon(Icons.bloodtype),
+                          border: OutlineInputBorder(),
+                        ),
+                        items: _bloodTypes
+                            .where((type) => type != 'All')
+                            .map(
+                              (type) => DropdownMenuItem<String>(
+                                value: type,
+                                child: Text(type),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  setDialogState(() {
+                                    selectedBloodType = value;
+                                  });
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 16),
+
+                      DropdownButtonFormField<int>(
+                        initialValue: unitsNeeded,
+                        decoration: const InputDecoration(
+                          labelText: 'Units Needed',
+                          prefixIcon: Icon(Icons.medical_services),
+                          border: OutlineInputBorder(),
+                        ),
+                        items: List.generate(5, (index) {
+                          final units = index + 1;
+
+                          return DropdownMenuItem<int>(
+                            value: units,
+                            child: Text(
+                              '$units ${units == 1 ? 'unit' : 'units'}',
+                            ),
+                          );
+                        }),
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  setDialogState(() {
+                                    unitsNeeded = value;
+                                  });
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 16),
+
+                      DropdownButtonFormField<int>(
+                        initialValue: selectedDonationCenterId,
+                        isExpanded: true,
+                        decoration: InputDecoration(
+                          labelText: 'Donation Center',
+                          prefixIcon: const Icon(
+                            Icons.local_hospital_outlined,
+                          ),
+                          border: const OutlineInputBorder(),
+                          helperText: userPosition == null
+                              ? 'Choose an available donation center'
+                              : 'Centers sorted by distance from you',
+                        ),
+                        items: donationCenters.asMap().entries.map((entry) {
+                          final index = entry.key;
+                          final center = entry.value;
+                          final distance = distanceKmFor(center);
+                          final recommended = index == 0 &&
+                              userPosition != null &&
+                              distance.isFinite;
+
+                          final name =
+                              center['name']?.toString() ?? 'Donation Center';
+                          final location =
+                              center['location']?.toString() ?? '';
+
+                          final details = <String>[
+                            if (location.isNotEmpty) location,
+                            if (distance.isFinite)
+                              '${distance.toStringAsFixed(1)} km away',
+                            if (recommended) 'Recommended',
+                          ].join(' · ');
+
+                          return DropdownMenuItem<int>(
+                            value: int.parse(center['id'].toString()),
+                            child: Text(
+                              details.isEmpty ? name : '$name\n$details',
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 2,
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  setDialogState(() {
+                                    selectedDonationCenterId = value;
+                                  });
+                                }
+                              },
+                        validator: (value) {
+                          if (value == null) {
+                            return 'Please select a donation center.';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 16),
+
+                      DropdownButtonFormField<String>(
+                        initialValue: urgency,
+                        decoration: const InputDecoration(
+                          labelText: 'Urgency',
+                          prefixIcon: Icon(Icons.priority_high),
+                          border: OutlineInputBorder(),
+                        ),
+                        items: const [
+                          DropdownMenuItem(
+                            value: 'Normal',
+                            child: Text('Normal'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'Urgent',
+                            child: Text('Urgent'),
+                          ),
+                          DropdownMenuItem(
+                            value: 'Critical',
+                            child: Text('Critical'),
+                          ),
+                        ],
+                        onChanged: isSubmitting
+                            ? null
+                            : (value) {
+                                if (value != null) {
+                                  setDialogState(() {
+                                    urgency = value;
+                                  });
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 16),
+
+                      TextFormField(
+                        controller: notesController,
+                        maxLines: 3,
+                        textCapitalization: TextCapitalization.sentences,
+                        decoration: const InputDecoration(
+                          labelText: 'Additional Notes (Optional)',
+                          prefixIcon: Icon(Icons.notes),
+                          border: OutlineInputBorder(),
+                          alignLabelWithHint: true,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          if (!formKey.currentState!.validate()) return;
+
+                          setDialogState(() {
+                            isSubmitting = true;
+                          });
+
+                          try {
+                            final notes = [
+                              if (urgency != 'Normal') 'Urgency: $urgency',
+                              if (notesController.text.trim().isNotEmpty)
+                                notesController.text.trim(),
+                            ].join('\n');
+
+                            await ApiService.createBloodRequest(
+                              patientName: patientNameController.text.trim(),
+                              bloodType: selectedBloodType,
+                              unitsNeeded: unitsNeeded,
+                              donationCenterId: selectedDonationCenterId!,
+                              notes: notes.isEmpty ? null : notes,
+                            );
+
+                            if (!dialogContext.mounted) return;
+
+                            Navigator.of(dialogContext).pop(true);
+                          } catch (e) {
+                            if (!dialogContext.mounted) return;
+
+                            setDialogState(() {
+                              isSubmitting = false;
+                            });
+
+                            ScaffoldMessenger.of(dialogContext).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  e.toString().replaceFirst(
+                                        'Exception: ',
+                                        '',
+                                      ),
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Submit Request'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (!mounted) return;
+
+    if (submitted == true) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Blood request submitted successfully.'),
+          backgroundColor: Colors.green,
+        ),
+      );
+
+      await _loadDonors();
+    }
+  } finally {
+    patientNameController.dispose();
+    notesController.dispose();
+  }
+}
 
   void _openDonorDetails(BloodDonor donor) {
     Navigator.push(
