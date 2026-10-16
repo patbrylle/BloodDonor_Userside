@@ -17,6 +17,7 @@ import 'blood_request.dart';
 import 'profile.dart';
 import 'notifications.dart';
 import 'activity.dart';
+import 'dart:async';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key, this.initialIndex = 0});
@@ -27,19 +28,104 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomescreenState();
 }
 
-class _HomescreenState extends State<HomeScreen> {
+
+class _HomescreenState extends State<HomeScreen>
+    with WidgetsBindingObserver {
   late int _currentIndex;
 
   UserProfile? _user;
   bool _isLoadingProfile = true;
   String? _profileError;
+  Timer? _profileRefreshTimer;
 
-  @override
-  void initState() {
-    super.initState();
-    _currentIndex = widget.initialIndex;
-    _loadProfile();
+  int _completedDonations = 0;
+  int _livesHelped = 0;
+  bool _isLoadingImpact = true;
+
+ @override
+void initState() {
+  super.initState();
+
+  _currentIndex = widget.initialIndex;
+
+  WidgetsBinding.instance.addObserver(this);
+
+  _loadProfile();
+
+    _profileRefreshTimer = Timer.periodic(
+  const Duration(seconds: 30),
+  (_) {
+    _refreshProfile();
+    _loadImpact();
+  },
+);
+}
+Future<void> _loadImpact() async {
+  try {
+    final donations = await ApiService.getMyDonationResponses();
+
+    final completedDonations = donations.where(
+      (donation) => donation['status']?.toString().toLowerCase() == 'completed',
+    );
+
+    final completedList = completedDonations.toList();
+
+    final livesHelped = completedList.fold<int>(
+      0,
+      (total, donation) =>
+          total + (int.tryParse(donation['units']?.toString() ?? '0') ?? 0),
+    );
+
+    if (!mounted) return;
+
+    setState(() {
+      _completedDonations = completedList.length;
+      _livesHelped = livesHelped;
+      _isLoadingImpact = false;
+    });
+  } catch (error) {
+    debugPrint('Could not load donation impact: $error');
+
+    if (!mounted) return;
+
+    setState(() {
+      _isLoadingImpact = false;
+    });
   }
+}
+Future<void> _refreshProfile() async {
+  if (!mounted || _isLoadingProfile) return;
+
+  try {
+    final user = await ApiService.getProfile();
+
+    if (!mounted) return;
+
+    setState(() {
+      _user = user;
+      _profileError = null;
+    });
+  } catch (error) {
+    debugPrint('Could not refresh profile: $error');
+  }
+}
+
+
+@override
+void didChangeAppLifecycleState(AppLifecycleState state) {
+  if (state == AppLifecycleState.resumed) {
+    _refreshProfile();
+    _loadImpact();
+  }
+}
+
+
+@override
+void dispose() {
+  _profileRefreshTimer?.cancel();
+  WidgetsBinding.instance.removeObserver(this);
+  super.dispose();
+}
 
   // =========================================================
   // LOAD PROFILE
@@ -289,6 +375,7 @@ class _HomescreenState extends State<HomeScreen> {
                               );
 
                               await _loadProfile();
+                              _loadImpact();
                             } catch (error) {
                               if (!dialogContext.mounted) return;
 
@@ -771,15 +858,15 @@ class _HomescreenState extends State<HomeScreen> {
                       style: theme.textTheme.titleMedium,
                     ),
                   ),
-                  const _ImpactValue(
-                    value: '2',
-                    label: 'Donations',
-                  ),
-                  const SizedBox(width: 18),
-                  const _ImpactValue(
-                    value: '6',
-                    label: 'Lives helped',
-                  ),
+              _ImpactValue(
+  value: _isLoadingImpact ? '...' : '$_completedDonations',
+  label: 'Donations',
+),
+const SizedBox(width: 18),
+_ImpactValue(
+  value: _isLoadingImpact ? '...' : '$_livesHelped',
+  label: 'Lives helped*',
+),
                 ],
               ),
             ],

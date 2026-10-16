@@ -3,6 +3,7 @@ import '../model/user_profile.dart';
 import '../theme/app_colors.dart';
 import '../theme/app_radius.dart';
 import '../widget/gradient_button.dart';
+import '../services/api_service.dart';
 
 class ProfileScreen extends StatefulWidget {
   final UserProfile? initialUser;
@@ -37,11 +38,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
       backgroundColor: Theme.of(context).colorScheme.surface,
       builder: (context) => _EditProfileForm(
         user: _user,
-        onSave: (updatedUser) {
+        onSave: (updatedUser) async {
+          // Save to Laravel first.
+          final savedUser = await ApiService.updateProfile(
+            profile: updatedUser,
+          );
+
+          if (!mounted) return;
+
+          // Update the screen only after Laravel confirms success.
           setState(() {
-            _user = updatedUser;
+            _user = savedUser;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
+
+          ScaffoldMessenger.of(this.context).showSnackBar(
             const SnackBar(
               content: Text('Profile updated successfully!'),
               backgroundColor: AppColors.success,
@@ -240,7 +250,7 @@ class _ProfileItem extends StatelessWidget {
 
 class _EditProfileForm extends StatefulWidget {
   final UserProfile user;
-  final Function(UserProfile) onSave;
+final Future<void> Function(UserProfile) onSave;
 
   const _EditProfileForm({required this.user, required this.onSave});
 
@@ -250,22 +260,14 @@ class _EditProfileForm extends StatefulWidget {
 
 class _EditProfileFormState extends State<_EditProfileForm> {
   final _formKey = GlobalKey<FormState>();
+  bool _saving = false;
   late TextEditingController _nameController;
   late TextEditingController _emailController;
   late TextEditingController _contactController;
   late TextEditingController _addressController;
   late String _bloodType;
 
-  final List<String> _bloodTypes = [
-    'A+',
-    'A-',
-    'B+',
-    'B-',
-    'AB+',
-    'AB-',
-    'O+',
-    'O-',
-  ];
+  
 
   @override
   void initState() {
@@ -344,38 +346,63 @@ class _EditProfileFormState extends State<_EditProfileForm> {
                 validator: (v) => v!.isEmpty ? 'Required' : null,
               ),
               const SizedBox(height: 16),
-              DropdownButtonFormField<String>(
-                initialValue: _bloodType,
-                decoration: const InputDecoration(
-                  labelText: 'Blood Type',
-                  prefixIcon: Icon(Icons.bloodtype_outlined),
-                ),
-                items: _bloodTypes
-                    .map((t) => DropdownMenuItem(value: t, child: Text(t)))
-                    .toList(),
-                onChanged: (v) => setState(() => _bloodType = v!),
-              ),
+              
+TextFormField(
+  initialValue: _bloodType,
+  readOnly: true,
+  decoration: const InputDecoration(
+    labelText: 'Blood Type',
+    prefixIcon: Icon(Icons.bloodtype_outlined),
+    helperText: 'Contact an administrator to request a correction.',
+  ),
+),
+
               const SizedBox(height: 32),
-              SizedBox(
-                width: double.infinity,
-                child: GradientButton(
-                  label: 'SAVE CHANGES',
-                  onTap: () {
-                    if (_formKey.currentState!.validate()) {
-                      widget.onSave(
-                        UserProfile(
-                          name: _nameController.text,
-                          email: _emailController.text,
-                          contact: _contactController.text,
-                          address: _addressController.text,
-                          bloodType: _bloodType,
-                        ),
-                      );
-                      Navigator.pop(context);
-                    }
-                  },
-                ),
+           
+SizedBox(
+  width: double.infinity,
+  child: GradientButton(
+    label: _saving ? 'SAVING...' : 'SAVE CHANGES',
+    onTap: () async {
+      if (_saving || !_formKey.currentState!.validate()) {
+        return;
+      }
+
+      setState(() => _saving = true);
+
+      try {
+        await widget.onSave(
+          UserProfile(
+            name: _nameController.text.trim(),
+            email: _emailController.text.trim(),
+            contact: _contactController.text.trim(),
+            address: _addressController.text.trim(),
+            bloodType: _bloodType,
+          ),
+        );
+          if (!mounted) return;
+
+          Navigator.pop(this.context);
+        } catch (e) {
+          if (!mounted) return;
+
+          ScaffoldMessenger.of(this.context).showSnackBar(
+            SnackBar(
+              content: Text(
+                e.toString().replaceFirst('Exception: ', ''),
               ),
+              backgroundColor: Colors.red,
+            ),
+          );
+      } finally {
+        if (mounted) {
+          setState(() => _saving = false);
+        }
+      }
+    },
+  ),
+),
+  
             ],
           ),
         ),

@@ -12,8 +12,7 @@ class Donate extends StatefulWidget {
 }
 
 class _DonateState extends State<Donate> {
-  static const _donorBloodType = 'O+';
-
+String? _donorBloodType;
   final _searchController = TextEditingController();
   final _filterButtonKey = GlobalKey();
 
@@ -37,36 +36,43 @@ class _DonateState extends State<Donate> {
   }
 
   Future<void> _loadRequests() async {
-    if (mounted) {
-      setState(() {
-        _isLoading = true;
-        _loadError = null;
-      });
-    }
-
-    try {
-      final requests = await ApiService.getBloodRequests();
-
-      if (!mounted) return;
-
-      setState(() {
-        // Only display requests that are still pending.
-        _requests = requests
-            .where((request) =>
-                request.status.trim().toLowerCase() == 'approved')
-            .toList();
-        _isLoading = false;
-      });
-    } catch (error) {
-      if (!mounted) return;
-
-      setState(() {
-        _loadError = error.toString().replaceFirst('Exception: ', '');
-        _isLoading = false;
-      });
-    }
+  if (mounted) {
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
   }
 
+  try {
+    // Fetch the logged-in user's latest saved profile.
+    final profile = await ApiService.getProfile();
+
+    // Fetch the latest blood requests.
+    final requests = await ApiService.getBloodRequests();
+
+    if (!mounted) return;
+
+    setState(() {
+      _donorBloodType = profile.bloodType.trim().toUpperCase();
+
+      _requests = requests
+          .where(
+            (request) =>
+                request.status.trim().toLowerCase() == 'approved',
+          )
+          .toList();
+
+      _isLoading = false;
+    });
+  } catch (error) {
+    if (!mounted) return;
+
+    setState(() {
+      _loadError = error.toString().replaceFirst('Exception: ', '');
+      _isLoading = false;
+    });
+  }
+}
   @override
   Widget build(BuildContext context) {
     final query = _searchController.text.trim().toLowerCase();
@@ -407,23 +413,27 @@ class _DonateState extends State<Donate> {
     });
   }
 
-  bool _isCompatible(String recipientBloodType) {
-    const compatibleRecipients = {
-      'O+': {'O+'},
-      'O-': {'O+', 'O-', 'A+', 'A-', 'B+', 'B-', 'AB+', 'AB-'},
-      'A+': {'A+', 'AB+'},
-      'A-': {'A+', 'A-', 'AB+', 'AB-'},
-      'B+': {'B+', 'AB+'},
-      'B-': {'B+', 'B-', 'AB+', 'AB-'},
-      'AB+': {'AB+'},
-      'AB-': {'AB+', 'AB-'},
-    };
+ bool _isCompatible(String recipientBloodType) {
+  const compatibleRecipients = {
+    'O-': {'O-', 'O+', 'A-', 'A+', 'B-', 'B+', 'AB-', 'AB+'},
+    'O+': {'O+', 'A+', 'B+', 'AB+'},
+    'A-': {'A-', 'A+', 'AB-', 'AB+'},
+    'A+': {'A+', 'AB+'},
+    'B-': {'B-', 'B+', 'AB-', 'AB+'},
+    'B+': {'B+', 'AB+'},
+    'AB-': {'AB-', 'AB+'},
+    'AB+': {'AB+'},
+  };
 
-    return compatibleRecipients[_donorBloodType]
-            ?.contains(recipientBloodType) ??
-        false;
+  final donorType = _donorBloodType?.trim().toUpperCase();
+  final recipientType = recipientBloodType.trim().toUpperCase();
+
+  if (donorType == null || donorType.isEmpty) {
+    return false;
   }
 
+  return compatibleRecipients[donorType]?.contains(recipientType) ?? false;
+}
   Future<void> _confirmDonation(BloodRequest request) async {
     final confirmed = await showDialog<bool>(
       context: context,

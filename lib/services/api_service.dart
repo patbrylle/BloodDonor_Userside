@@ -182,6 +182,58 @@ class ApiService {
   }
 
   // =========================================================
+  // UPDATE USER PROFILE
+  // PUT /api/user
+  // =========================================================
+
+  static Future<UserProfile> updateProfile({
+    required UserProfile profile,
+  }) async {
+    final token = await _requireToken();
+
+    final response = await http
+        .put(
+          _apiUri('user'),
+          headers: _jsonHeaders(token: token),
+          body: jsonEncode({
+            'name': profile.name.trim(),
+            'email': profile.email.trim(),
+            'contact_number': profile.contact.trim(),
+            'address': profile.address.trim(),
+            'blood_type': profile.bloodType,
+          }),
+        )
+        .timeout(_timeout);
+
+    final data = _decodeResponse(response.body);
+
+    if (response.statusCode == 200 && data['success'] == true) {
+      final userData = data['user'];
+
+      if (userData is! Map) {
+        throw Exception('The server returned invalid profile data.');
+      }
+
+      return UserProfile.fromJson(
+        Map<String, dynamic>.from(userData),
+      );
+    }
+
+    if (response.statusCode == 401) {
+      await clearToken();
+      _checkUnauthorized(response.statusCode);
+    }
+
+    if (response.statusCode == 422) {
+      throw Exception(_validationMessage(data));
+    }
+
+    throw Exception(
+      data['message']?.toString() ?? 'Could not update your profile.',
+    );
+  }
+
+  // =========================================================
   // SUBMIT DONOR APPLICATION
   // POST /api/donor-applications
   // =========================================================
